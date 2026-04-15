@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Modern Outlet — Expo Schedule Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:Inter,-apple-system,sans-serif;background:#F5F0EB;color:#000}
+  button{font-family:Inter,-apple-system,sans-serif;cursor:pointer;border-radius:0}
+  input[type=range]{-webkit-appearance:none;width:100%;height:2px;background:#CCC;outline:none;cursor:pointer}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;background:#000;border-radius:50%;cursor:pointer}
+  input[type=range]::-moz-range-thumb{width:14px;height:14px;background:#000;border-radius:50%;cursor:pointer;border:none}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script crossorigin src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel" data-type="module">
+var h = React.createElement;
+var useState = React.useState, useMemo = React.useMemo;
+var BarChart=Recharts.BarChart, Bar=Recharts.Bar, XAxis=Recharts.XAxis, YAxis=Recharts.YAxis,
+    CartesianGrid=Recharts.CartesianGrid, Tooltip=Recharts.Tooltip, Legend=Recharts.Legend,
+    ResponsiveContainer=Recharts.ResponsiveContainer, RadarChart=Recharts.RadarChart,
+    PolarGrid=Recharts.PolarGrid, PolarAngleAxis=Recharts.PolarAngleAxis,
+    PolarRadiusAxis=Recharts.PolarRadiusAxis, Radar=Recharts.Radar,
+    PieChart=Recharts.PieChart, Pie=Recharts.Pie, Cell=Recharts.Cell;
+
+/* ── PALETTE ── */
+var BG="#F5F0EB",WHITE="#FFFFFF",MUTED="#888888",LIGHT="#AEAEAE",
+    BORDER="#E0DBD5",SECTION="#EDE8E3",RED="#8B0000",
+    CT_COL="#000000",NYC_COL="#B87333",HYB_COL="#777777",SAGE="#5B7553";
+var PIE_C=["#000","#B87333","#5B7553","#888","#C8C8C8","#DDD","#555"];
+
+/* ── FORMAT ── */
+var fmt=function(n){if(Math.abs(n)>=1e6)return "$"+(n/1e6).toFixed(1)+"M";if(Math.abs(n)>=1e3)return "$"+(n/1e3).toFixed(0)+"K";return "$"+n.toFixed(0)};
+var pct=function(n){return (n*100).toFixed(0)+"%"};
+
+/* ── FIXED ASSUMPTIONS ── */
+var AOV=1200,SPLIT=0.60,CONV=0.15,AOV_UP=1.25,EXPO_CAC=100,
+    CT_TR=75,NYC_TR=200,WK_M=1.8;
+var E_AOV=AOV*AOV_UP, NRPS=E_AOV*SPLIT, CPS=NRPS-EXPO_CAC;
+
+/* ── COMPUTE SINGLE SCENARIO (CT or NYC) ── */
+function calcSingle(key,days,wd,traffic,bo,srPerDay,trBase,trExtra,td,ins,prRate,mkBase,mkPerDay,mkCap,con) {
+  var we=days-wd, vis=wd*traffic+we*traffic*WK_M;
+  var sales=Math.round(vis*CONV), gmv=sales*E_AOV, nr=gmv*SPLIT;
+  var staff=prRate*days, sr=srPerDay*days;
+  var mk=Math.min(mkBase+mkPerDay*days,mkCap);
+  var tr=trBase+(days>7?trExtra:0);
+  var rc=sr+tr+td+ins+staff+mk+con;
+  var y1c=rc+bo, cac=sales*EXPO_CAC, pR=nr-rc-cac;
+  var roas=rc+cac>0?gmv/(rc+cac):0;
+  var be=CPS>0?Math.ceil(rc/CPS):999, ms=be>0?(sales-be)/be:0;
+  return {key:key,days:days,wd:wd,we:we,visitors:vis,sales:sales,gmv:gmv,netRev:nr,
+    staff:staff,sr:sr,tr:tr,td:td,ins:ins,mk:mk,con:con,
+    recurringCost:rc,totalCostY1:y1c,totalCac:cac,profitRecur:pR,roas:roas,
+    beSales:be,marginSafety:ms,buildout:bo,
+    cb:[{n:"Space",v:sr},{n:"Transport",v:tr},{n:"Displays",v:td+bo},{n:"Insurance",v:ins},{n:"Staff",v:staff},{n:"Marketing",v:mk},{n:"Other",v:con+cac}]};
+}
+
+function calcCT(days,wd){
+  return Object.assign(calcSingle("ct",days,wd,CT_TR,54150,0,0,0,0,500,950,5200,0,5200,500),{name:"CT "+days+"-Day",color:CT_COL});
+}
+function calcNYC(days,wd){
+  return Object.assign(calcSingle("nyc",days,wd,NYC_TR,0,1500,5500,1500,2500,1300,1800,5000,330,12000,500),{name:"NYC "+days+"-Day",color:NYC_COL});
+}
+
+/* ── COMPUTE HYBRID from per-day assignments ── */
+function calcHybrid(schedule) {
+  // schedule = array of {loc:"ct"|"nyc", type:"wd"|"we"}
+  var ctWd=0,ctWe=0,nycWd=0,nycWe=0;
+  schedule.forEach(function(d){
+    if(d.loc==="ct"&&d.type==="wd")ctWd++;
+    if(d.loc==="ct"&&d.type==="we")ctWe++;
+    if(d.loc==="nyc"&&d.type==="wd")nycWd++;
+    if(d.loc==="nyc"&&d.type==="we")nycWe++;
+  });
+  var ctDays=ctWd+ctWe, nycDays=nycWd+nycWe, totalDays=schedule.length;
+  var hasCT=ctDays>0, hasNYC=nycDays>0;
+
+  // Visitors
+  var vis=ctWd*CT_TR+ctWe*CT_TR*WK_M+nycWd*NYC_TR+nycWe*NYC_TR*WK_M;
+  var sales=Math.round(vis*CONV), gmv=sales*E_AOV, nr=gmv*SPLIT;
+
+  // Costs
+  var sr=nycDays*1500;
+  var tr=hasNYC?(4000+(nycDays>7?1000:0)):0;
+  var td=(hasNYC?2000:0);
+  var bo=hasCT?54150:0;
+  var ins=hasCT&&hasNYC?1800:hasCT?500:1300;
+  var staff=ctDays*950+nycDays*1800;
+  var mk=0;
+  if(hasCT)mk+=5200;
+  if(hasNYC)mk+=Math.min(4000+nycDays*300,10000);
+  var con=500;
+
+  var rc=sr+tr+td+ins+staff+mk+con;
+  var cac=sales*EXPO_CAC, pR=nr-rc-cac;
+  var roas=rc+cac>0?gmv/(rc+cac):0;
+  var be=CPS>0?Math.ceil(rc/CPS):999, ms=be>0?(sales-be)/be:0;
+
+  return {key:"hybrid",name:"Hybrid "+totalDays+"-Day",color:HYB_COL,
+    days:totalDays,ctDays:ctDays,nycDays:nycDays,wd:ctWd+nycWd,we:ctWe+nycWe,
+    visitors:vis,sales:sales,gmv:gmv,netRev:nr,
+    staff:staff,sr:sr,tr:tr,td:td,ins:ins,mk:mk,con:con,
+    recurringCost:rc,totalCostY1:rc+bo,totalCac:cac,profitRecur:pR,roas:roas,
+    beSales:be,marginSafety:ms,buildout:bo,
+    cb:[{n:"Space",v:sr},{n:"Transport",v:tr},{n:"Displays",v:td+bo},{n:"Insurance",v:ins},{n:"Staff",v:staff},{n:"Marketing",v:mk},{n:"Other",v:con+cac}]};
+}
+
+/* ── Tooltip ── */
+function TT(props){
+  if(!props.active||!props.payload)return null;
+  return h("div",{style:{background:"#FFF",border:"1px solid #E0DBD5",padding:"12px 16px",fontSize:12}},
+    h("div",{style:{fontWeight:700,marginBottom:6}},props.label),
+    props.payload.map(function(p,i){return h("div",{key:i,style:{color:p.color||"#000",marginBottom:2}},p.name+": "+(typeof p.value==="number"?fmt(p.value):p.value))}));
+}
+
+var PC={
+  ct:{p:["Lowest recurring cost","Leverages warehouse","Reusable buildout"],c:["Lower foot traffic","Limited walk-ups"]},
+  nyc:{p:["Massive foot traffic","Highest revenue","Tests NYC market"],c:["Highest cost","Heavy logistics"]},
+  hybrid:{p:["Both markets covered","Flexible scheduling","Custom day mix"],c:["Higher total capital","Logistically complex"]},
+};
+
+/* ══════════════════════════════════════
+   MAIN APP
+   ══════════════════════════════════════ */
+function App(){
+  // CT schedule
+  var _cd=useState(4),ctD=_cd[0],setCtD=_cd[1];
+  var _cw=useState(2),ctW=_cw[0],setCtW=_cw[1];
+  // NYC schedule
+  var _nd=useState(7),nycD=_nd[0],setNycD=_nd[1];
+  var _nw=useState(5),nycW=_nw[0],setNycW=_nw[1];
+  // Hybrid day-by-day: array of {loc,type}
+  var _hy=useState(function(){
+    var arr=[];
+    for(var i=0;i<9;i++){
+      if(i<4) arr.push({loc:"ct",type:i<2?"wd":"we"});
+      else arr.push({loc:"nyc",type:i<8?"wd":"we"});
+    }
+    return arr;
+  }),hybSched=_hy[0],setHybSched=_hy[1];
+  // Events per year
+  var _ep=useState(2),epy=_ep[0],setEpy=_ep[1];
+  // Active detail
+  var _ac=useState(null),active=_ac[0],setActive=_ac[1];
+
+  // Compute all 3
+  var ctResult=useMemo(function(){return calcCT(ctD,ctW)},[ctD,ctW]);
+  var nycResult=useMemo(function(){return calcNYC(nycD,nycW)},[nycD,nycW]);
+  var hybResult=useMemo(function(){return calcHybrid(hybSched)},[hybSched]);
+  var sc=[ctResult,nycResult,hybResult];
+
+  var bA=sc.reduce(function(a,b){return (a.profitRecur*epy-a.buildout)>(b.profitRecur*epy-b.buildout)?a:b});
+  var bR=sc.reduce(function(a,b){return a.roas>b.roas?a:b});
+  var bS=sc.reduce(function(a,b){return a.marginSafety>b.marginSafety?a:b});
+  var det=active!==null?sc.find(function(s){return s.key===active}):null;
+
+  // Hybrid helpers
+  function addHybDay(){
+    setHybSched(function(prev){
+      if(prev.length>=21)return prev;
+      return prev.concat([{loc:"nyc",type:"wd"}]);
+    });
+  }
+  function removeHybDay(){
+    setHybSched(function(prev){
+      if(prev.length<=1)return prev;
+      return prev.slice(0,-1);
+    });
+  }
+  function toggleLoc(idx){
+    setHybSched(function(prev){
+      var next=prev.slice();
+      next[idx]=Object.assign({},next[idx],{loc:next[idx].loc==="ct"?"nyc":"ct"});
+      return next;
+    });
+  }
+  function toggleType(idx){
+    setHybSched(function(prev){
+      var next=prev.slice();
+      next[idx]=Object.assign({},next[idx],{type:next[idx].type==="wd"?"we":"wd"});
+      return next;
+    });
+  }
+  function setAllCT(){
+    setHybSched(function(prev){return prev.map(function(d){return Object.assign({},d,{loc:"ct"})})});
+  }
+  function setAllNYC(){
+    setHybSched(function(prev){return prev.map(function(d){return Object.assign({},d,{loc:"nyc"})})});
+  }
+
+  /* ── Stepper ── */
+  function Stepper(props){
+    return h("div",{style:{display:"flex",alignItems:"center",gap:10}},
+      props.label&&h("span",{style:{fontSize:11,color:MUTED,fontWeight:500,minWidth:props.labelWidth||70}},props.label),
+      h("button",{onClick:function(){if(props.value>props.min)props.onChange(props.value-1)},
+        style:{width:28,height:28,background:props.value<=props.min?"#F0EDE8":"#000",color:props.value<=props.min?"#AAA":"#FFF",border:"none",fontWeight:700,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"}},"\u2212"),
+      h("span",{style:{fontSize:18,fontWeight:700,minWidth:30,textAlign:"center"}},props.value+(props.suffix||"")),
+      h("button",{onClick:function(){if(props.value<props.max)props.onChange(props.value+1)},
+        style:{width:28,height:28,background:props.value>=props.max?"#F0EDE8":"#000",color:props.value>=props.max?"#AAA":"#FFF",border:"none",fontWeight:700,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"}},"+"));
+  }
+
+  /* ── Day grid for CT/NYC ── */
+  function DayGrid(props){
+    var blocks=[];
+    for(var i=0;i<props.maxSlots;i++){
+      var isOn=i<props.total;
+      var isWe=isOn&&i>=props.wd;
+      var bg=!isOn?"#F0EDE8":isWe?props.color+"30":props.color;
+      var tx=!isOn?"#CCC":isWe?props.color:"#FFF";
+      blocks.push(h("div",{key:i,
+        onClick:function(idx){return function(){
+          if(idx<props.total){var nv=idx;if(nv<1)nv=1;props.onTotal(nv);if(props.wd>nv)props.onWd(nv)}
+          else{props.onTotal(idx+1)}
+        }}(i),
+        style:{width:36,height:44,display:"flex",alignItems:"center",justifyContent:"center",
+          fontSize:11,fontWeight:600,background:bg,color:tx,cursor:"pointer",
+          transition:"all 0.1s",border:"1px solid "+(isOn?props.color:"#E0DBD5"),userSelect:"none"}},
+        isOn?(isWe?"WE":"WD"):""));
+    }
+    return h("div",{style:{display:"flex",gap:3,flexWrap:"wrap"}},blocks);
+  }
+
+  /* ── Scenario schedule card ── */
+  function SchedCard(props){
+    var s=props.scenario;
+    return h("div",{style:{background:WHITE,padding:"28px 28px 24px"}},
+      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}},
+        h("div",{style:{display:"flex",alignItems:"center",gap:10}},
+          h("div",{style:{width:12,height:12,background:props.color}}),
+          h("span",{style:{fontWeight:700,fontSize:16,letterSpacing:"-0.3px"}},props.label)),
+        h("div",{style:{textAlign:"right"}},
+          h("div",{style:{fontSize:22,fontWeight:700,letterSpacing:"-0.5px",color:s.profitRecur>=0?"#000":RED}},fmt(s.profitRecur)),
+          h("div",{style:{fontSize:10,color:MUTED}},"per event"))),
+      h(Stepper,{value:props.total,min:1,max:props.maxDays,label:"Total Days",onChange:function(v){props.onTotal(v);if(props.wd>v)props.onWd(v)}}),
+      h("div",{style:{height:12}}),
+      h(DayGrid,{total:props.total,wd:props.wd,maxSlots:props.maxDays,color:props.color,onTotal:props.onTotal,onWd:props.onWd}),
+      h("div",{style:{marginTop:10}},
+        h("div",{style:{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:4}},
+          h("span",{style:{color:MUTED}},props.wd+" weekday"+(props.wd!==1?"s":"")),
+          h("span",{style:{color:MUTED}},(props.total-props.wd)+" weekend"+((props.total-props.wd)!==1?"s":""))),
+        h("input",{type:"range",min:0,max:props.total,step:1,value:props.wd,
+          onChange:function(e){props.onWd(parseInt(e.target.value))},
+          style:{width:"100%",accentColor:"#000"}})),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:1,background:BORDER,marginTop:16}},
+        [{l:"Visitors",v:Math.round(s.visitors).toLocaleString()},{l:"Sales",v:s.sales.toLocaleString()},{l:"Cost",v:fmt(s.recurringCost)}].map(function(m){
+          return h("div",{key:m.l,style:{background:BG,padding:"10px 8px",textAlign:"center"}},
+            h("div",{style:{fontSize:9,color:MUTED,textTransform:"uppercase",letterSpacing:1}},m.l),
+            h("div",{style:{fontSize:14,fontWeight:700,marginTop:3}},m.v));})));
+  }
+
+  /* ── Sec label ── */
+  function Sec(props){return h("div",{style:{fontSize:10,fontWeight:600,color:MUTED,textTransform:"uppercase",letterSpacing:2,marginBottom:12}},props.children)}
+
+  /* ── Chart data ── */
+  var cmpD=sc.map(function(s){return {name:s.name,"Revenue":s.netRev,"Cost":s.recurringCost,"Profit":s.profitRecur}});
+  var rdD=[
+    Object.assign({m:"Revenue"},Object.fromEntries(sc.map(function(s){return [s.name,Math.min(s.netRev/4000,100)]}))),
+    Object.assign({m:"ROAS"},Object.fromEntries(sc.map(function(s){return [s.name,Math.min(s.roas*12,100)]}))),
+    Object.assign({m:"Safety"},Object.fromEntries(sc.map(function(s){return [s.name,Math.min(s.marginSafety*20,100)]}))),
+    Object.assign({m:"Low Cost"},Object.fromEntries(sc.map(function(s){return [s.name,Math.max(0,100-s.recurringCost/600)]}))),
+    Object.assign({m:"Profit"},Object.fromEntries(sc.map(function(s){var ap=s.profitRecur*epy-s.buildout;return [s.name,Math.min(ap/8000,100)]}))),
+  ];
+
+  // Hybrid counts for display
+  var hybCtD=hybSched.filter(function(d){return d.loc==="ct"}).length;
+  var hybNycD=hybSched.filter(function(d){return d.loc==="nyc"}).length;
+
+  /* ══ RENDER ══ */
+  return h("div",{style:{background:BG,minHeight:"100vh",fontFamily:"Inter,-apple-system,sans-serif"}},
+
+    /* NAV */
+    h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 48px",borderBottom:"1px solid "+BORDER}},
+      h("div",{style:{fontSize:12,color:MUTED}},"Schedule Planner"),
+      h("div",{style:{fontWeight:700,fontSize:15,letterSpacing:"-0.3px",lineHeight:1.1,textAlign:"center"}},
+        h("div",{style:{fontSize:16}},"Modern"),h("div",{style:{fontSize:16}},"Outlet")),
+      h("div",{style:{fontSize:12,color:MUTED}},"Expo ROI Model")),
+
+    h("div",{style:{maxWidth:1200,margin:"0 auto",padding:"40px 48px 64px"}},
+
+      /* HERO */
+      h("div",{style:{textAlign:"center",marginBottom:40}},
+        h("h1",{style:{fontSize:"clamp(2rem, 4.5vw, 3.2rem)",fontWeight:700,margin:"0 0 10px",letterSpacing:"-1.5px",lineHeight:1.1}},"Plan Your Expo Schedule"),
+        h("p",{style:{color:MUTED,fontSize:14,maxWidth:500,margin:"0 auto",lineHeight:1.6}},"Set days for CT and NYC independently, then craft your own hybrid mix day by day.")),
+
+      /* EVENTS PER YEAR */
+      h("div",{style:{display:"flex",justifyContent:"center",marginBottom:32}},
+        h("div",{style:{background:WHITE,padding:"14px 28px",display:"inline-flex"}},
+          h(Stepper,{value:epy,min:1,max:6,onChange:setEpy,label:"Events / Year",suffix:"x",labelWidth:90}))),
+
+      /* TOP METRICS */
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:1,background:BORDER,marginBottom:36}},
+        [{l:"Best Annual Profit",v:fmt(bA.profitRecur*epy-bA.buildout),s:bA.name},
+         {l:"Highest ROAS",v:bR.roas.toFixed(1)+"x",s:bR.name},
+         {l:"Safest Option",v:pct(bS.marginSafety)+" margin",s:bS.name},
+         {l:"Expo AOV",v:fmt(E_AOV),s:fmt(AOV)+" + "+pct(AOV_UP-1)+" uplift"}
+        ].map(function(m,i){
+          return h("div",{key:i,style:{background:WHITE,padding:"20px 16px",textAlign:"center"}},
+            h("div",{style:{fontSize:10,color:MUTED,textTransform:"uppercase",letterSpacing:1.5,marginBottom:6,fontWeight:500}},m.l),
+            h("div",{style:{fontSize:24,fontWeight:700,letterSpacing:"-1px",lineHeight:1}},m.v),
+            h("div",{style:{fontSize:11,color:LIGHT,marginTop:4}},m.s))})),
+
+      /* ── CT & NYC CARDS ── */
+      h(Sec,null,"Individual Scenarios"),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:1,background:BORDER,marginBottom:36}},
+        h(SchedCard,{label:"CT Warehouse",color:CT_COL,total:ctD,wd:ctW,maxDays:14,onTotal:setCtD,onWd:setCtW,scenario:ctResult}),
+        h(SchedCard,{label:"NYC Pop-Up",color:NYC_COL,total:nycD,wd:nycW,maxDays:21,onTotal:setNycD,onWd:setNycW,scenario:nycResult})),
+
+      /* ══ HYBRID BUILDER ══ */
+      h(Sec,null,"Build Your Hybrid Schedule"),
+      h("div",{style:{background:WHITE,padding:"32px 32px 28px",marginBottom:36}},
+
+        /* Header row */
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}},
+          h("div",{style:{display:"flex",alignItems:"center",gap:10}},
+            h("div",{style:{width:12,height:12,background:HYB_COL}}),
+            h("span",{style:{fontWeight:700,fontSize:16,letterSpacing:"-0.3px"}},"Hybrid Schedule"),
+            h("span",{style:{fontSize:12,color:MUTED,marginLeft:8}},hybSched.length+" days total")),
+          h("div",{style:{textAlign:"right"}},
+            h("div",{style:{fontSize:22,fontWeight:700,letterSpacing:"-0.5px",color:hybResult.profitRecur>=0?"#000":RED}},fmt(hybResult.profitRecur)),
+            h("div",{style:{fontSize:10,color:MUTED}},"per event"))),
+
+        /* Add/remove days + presets */
+        h("div",{style:{display:"flex",gap:8,alignItems:"center",marginBottom:20,flexWrap:"wrap"}},
+          h(Stepper,{value:hybSched.length,min:1,max:21,label:"Days",onChange:function(v){
+            if(v>hybSched.length)addHybDay();else removeHybDay();
+          }}),
+          h("div",{style:{width:1,height:20,background:BORDER,margin:"0 8px"}}),
+          h("button",{onClick:setAllCT,style:{background:CT_COL,color:"#FFF",border:"none",padding:"6px 14px",fontWeight:600,fontSize:11}},"All CT"),
+          h("button",{onClick:setAllNYC,style:{background:NYC_COL,color:"#FFF",border:"none",padding:"6px 14px",fontWeight:600,fontSize:11}},"All NYC"),
+          h("div",{style:{flex:1}}),
+          h("span",{style:{fontSize:11,color:MUTED}},hybCtD+" CT days, "+hybNycD+" NYC days")),
+
+        /* Legend */
+        h("div",{style:{display:"flex",gap:16,marginBottom:12,fontSize:10,color:MUTED}},
+          h("div",{style:{display:"flex",alignItems:"center",gap:4}},
+            h("div",{style:{width:14,height:14,background:CT_COL}}),h("span",null,"CT Weekday")),
+          h("div",{style:{display:"flex",alignItems:"center",gap:4}},
+            h("div",{style:{width:14,height:14,background:CT_COL+"30",border:"1px solid "+CT_COL}}),h("span",null,"CT Weekend")),
+          h("div",{style:{display:"flex",alignItems:"center",gap:4}},
+            h("div",{style:{width:14,height:14,background:NYC_COL}}),h("span",null,"NYC Weekday")),
+          h("div",{style:{display:"flex",alignItems:"center",gap:4}},
+            h("div",{style:{width:14,height:14,background:NYC_COL+"30",border:"1px solid "+NYC_COL}}),h("span",null,"NYC Weekend"))),
+
+        /* ── THE DAY TILES ── */
+        h("div",{style:{display:"flex",gap:4,flexWrap:"wrap",marginBottom:20}},
+          hybSched.map(function(day,i){
+            var isCt=day.loc==="ct";
+            var isWe=day.type==="we";
+            var col=isCt?CT_COL:NYC_COL;
+            var bg=isWe?col+"30":col;
+            var tx=isWe?col:"#FFF";
+            return h("div",{key:i,style:{width:56,border:"1.5px solid "+col,overflow:"hidden",userSelect:"none"}},
+              /* Top: location - click to toggle */
+              h("div",{onClick:function(){toggleLoc(i)},
+                style:{height:38,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+                  background:bg,color:tx,cursor:"pointer",transition:"all 0.1s"}},
+                h("div",{style:{fontSize:9,fontWeight:600,letterSpacing:0.5,opacity:0.7}},"Day "+(i+1)),
+                h("div",{style:{fontSize:12,fontWeight:700,marginTop:1}},isCt?"CT":"NYC")),
+              /* Bottom: WD/WE - click to toggle */
+              h("div",{onClick:function(){toggleType(i)},
+                style:{height:26,display:"flex",alignItems:"center",justifyContent:"center",
+                  background:isWe?BG:WHITE,cursor:"pointer",fontSize:10,fontWeight:600,
+                  color:isWe?col:MUTED,borderTop:"1px solid "+BORDER}},
+                isWe?"WE":"WD"));
+          })),
+
+        /* Instruction hint */
+        h("div",{style:{fontSize:11,color:LIGHT,marginBottom:20,lineHeight:1.5}},
+          "Click the top half of each day to toggle between CT and NYC. Click the bottom to toggle weekday/weekend."),
+
+        /* Hybrid metrics grid */
+        h("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:1,background:BORDER}},
+          [{l:"CT Days",v:hybCtD},{l:"NYC Days",v:hybNycD},{l:"Visitors",v:Math.round(hybResult.visitors).toLocaleString()},{l:"Sales",v:hybResult.sales.toLocaleString()},{l:"Total Cost",v:fmt(hybResult.recurringCost)}].map(function(m){
+            return h("div",{key:m.l,style:{background:BG,padding:"12px 8px",textAlign:"center"}},
+              h("div",{style:{fontSize:9,color:MUTED,textTransform:"uppercase",letterSpacing:1}},m.l),
+              h("div",{style:{fontSize:15,fontWeight:700,marginTop:3}},m.v));
+          }))),
+
+      /* ── SCENARIO PILLS ── */
+      h("div",{style:{display:"flex",gap:8,marginBottom:32,flexWrap:"wrap"}},
+        sc.map(function(s){
+          var on=active===s.key;
+          return h("button",{key:s.key,onClick:function(){setActive(on?null:s.key)},
+            style:{background:on?"#000":"transparent",border:"1.5px solid "+(on?"#000":BORDER),
+              color:on?"#FFF":"#000",padding:"12px 22px",fontWeight:600,fontSize:12,borderRadius:0,transition:"all 0.15s"}},
+            h("div",null,s.name),
+            h("div",{style:{fontSize:11,fontWeight:400,opacity:0.6,marginTop:3}},fmt(s.profitRecur)+" / event"));
+        })),
+
+      /* ── DETAIL PANEL ── */
+      det&&h("div",{style:{background:WHITE,padding:"36px 40px",marginBottom:32}},
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"start",marginBottom:28}},
+          h("div",null,
+            h("h2",{style:{margin:0,fontSize:28,fontWeight:700,letterSpacing:"-0.8px"}},det.name),
+            h("div",{style:{display:"flex",gap:6,marginTop:10,flexWrap:"wrap"}},
+              PC[det.key]&&PC[det.key].p.map(function(p,i){return h("span",{key:i,style:{fontSize:10,fontWeight:600,color:SAGE,background:"#5B755312",padding:"3px 10px"}},p)})),
+            h("div",{style:{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}},
+              PC[det.key]&&PC[det.key].c.map(function(c,i){return h("span",{key:i,style:{fontSize:10,fontWeight:600,color:RED,background:"#8B000012",padding:"3px 10px"}},c)}))),
+          h("div",{style:{textAlign:"right"}},
+            h("div",{style:{fontSize:36,fontWeight:700,letterSpacing:"-1.5px"}},fmt(det.profitRecur*epy-det.buildout)),
+            h("div",{style:{fontSize:11,color:MUTED,marginTop:2}},"annual profit (x"+epy+" events)"))),
+        h("div",{style:{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:1,background:BORDER}},
+          [["Visitors",Math.round(det.visitors).toLocaleString()],["Sales",det.sales.toLocaleString()],["GMV",fmt(det.gmv)],["Net Rev",fmt(det.netRev)],["Profit/Event",fmt(det.profitRecur)],["ROAS",det.roas.toFixed(1)+"x"]].map(function(pair){
+            return h("div",{key:pair[0],style:{background:BG,padding:"16px 12px",textAlign:"center"}},
+              h("div",{style:{fontSize:9,color:MUTED,textTransform:"uppercase",letterSpacing:1.2}},pair[0]),
+              h("div",{style:{fontSize:18,fontWeight:700,marginTop:6,letterSpacing:"-0.5px"}},pair[1]))})),
+        h("div",{style:{marginTop:28,display:"flex",alignItems:"center",gap:32}},
+          h("div",{style:{width:150,height:150}},
+            h(ResponsiveContainer,null,
+              h(PieChart,null,
+                h(Pie,{data:det.cb.filter(function(d){return d.v>0}),dataKey:"v",nameKey:"n",cx:"50%",cy:"50%",innerRadius:36,outerRadius:60,paddingAngle:1,strokeWidth:0},
+                  det.cb.filter(function(d){return d.v>0}).map(function(_,i){return h(Cell,{key:i,fill:PIE_C[i%PIE_C.length]})})),
+                h(Tooltip,{formatter:function(v){return fmt(v)},contentStyle:{background:"#FFF",border:"1px solid #E0DBD5",fontSize:11,borderRadius:0}})))),
+          h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"3px 28px",fontSize:11}},
+            det.cb.filter(function(d){return d.v>0}).map(function(d,i){
+              return h("div",{key:i,style:{display:"flex",alignItems:"center",gap:8}},
+                h("div",{style:{width:8,height:8,background:PIE_C[i%PIE_C.length],flexShrink:0}}),
+                h("span",{style:{color:MUTED}},d.n),
+                h("span",{style:{fontWeight:700,marginLeft:"auto"}},fmt(d.v)))})))),
+
+      /* ── CHARTS ── */
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:1,background:BORDER,marginBottom:48}},
+        [{title:"Revenue vs. Cost per Event",el:h(BarChart,{data:cmpD,barGap:2},
+            h(CartesianGrid,{strokeDasharray:"3 3",stroke:SECTION}),
+            h(XAxis,{dataKey:"name",tick:{fill:MUTED,fontSize:10},axisLine:false,tickLine:false}),
+            h(YAxis,{tick:{fill:MUTED,fontSize:10},tickFormatter:fmt,axisLine:false,tickLine:false}),
+            h(Tooltip,{content:h(TT)}),h(Legend,{wrapperStyle:{fontSize:10}}),
+            h(Bar,{dataKey:"Revenue",fill:"#000",radius:[2,2,0,0]}),
+            h(Bar,{dataKey:"Cost",fill:"#C8C8C8",radius:[2,2,0,0]}),
+            h(Bar,{dataKey:"Profit",fill:SAGE,radius:[2,2,0,0]}))},
+         {title:"Scenario Scorecard",el:h(RadarChart,{data:rdD},
+            h(PolarGrid,{stroke:SECTION}),
+            h(PolarAngleAxis,{dataKey:"m",tick:{fill:MUTED,fontSize:10}}),
+            h(PolarRadiusAxis,{tick:false,axisLine:false,domain:[0,100]}),
+            sc.map(function(s){return h(Radar,{key:s.key,name:s.name,dataKey:s.name,stroke:s.color,fill:s.color,fillOpacity:0.04,strokeWidth:1.5})}),
+            h(Legend,{wrapperStyle:{fontSize:10}}))}
+        ].map(function(c,i){
+          return h("div",{key:i,style:{background:WHITE,padding:"28px 24px"}},
+            h("div",{style:{fontSize:10,fontWeight:600,color:MUTED,textTransform:"uppercase",letterSpacing:1.5,marginBottom:16}},c.title),
+            h(ResponsiveContainer,{width:"100%",height:260},c.el))})),
+
+      /* ── DECISION FRAMEWORK ── */
+      h("div",{style:{marginBottom:56}},
+        h("h2",{style:{fontSize:28,fontWeight:700,letterSpacing:"-0.8px",marginBottom:6}},"How to Narrow It Down"),
+        h("p",{style:{color:MUTED,fontSize:13,marginBottom:28}},"Three lenses to evaluate against your constraints."),
+        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:1,background:BORDER}},
+          [{n:"01",t:"Risk Tolerance",d:"Pick the scenario with the highest margin of safety above breakeven for the safest floor.",tag:bS.name},
+           {n:"02",t:"Maximum Upside",d:"For the highest annual profit, the data points to one winner.",tag:bA.name},
+           {n:"03",t:"Operational Reality",d:"With a lean team, start with one venue. Layer in the second once the playbook is proven.",tag:"Phase in"}
+          ].map(function(s){
+            return h("div",{key:s.n,style:{background:WHITE,padding:"28px 24px"}},
+              h("div",{style:{fontSize:10,fontWeight:600,color:LIGHT,letterSpacing:1.5,marginBottom:8}},s.n),
+              h("div",{style:{fontSize:16,fontWeight:700,marginBottom:8,letterSpacing:"-0.3px"}},s.t),
+              h("div",{style:{fontSize:12,color:MUTED,lineHeight:1.6,marginBottom:14}},s.d),
+              h("span",{style:{background:"#000",color:"#FFF",fontSize:10,fontWeight:600,padding:"5px 14px",letterSpacing:0.5}},s.tag));
+          }))),
+
+      /* FOOTER */
+      h("div",{style:{textAlign:"center",borderTop:"1px solid "+BORDER,paddingTop:24}},
+        h("div",{style:{fontWeight:700,fontSize:14,letterSpacing:"-0.3px",marginBottom:4}},"Modern Outlet"),
+        h("div",{style:{fontSize:10,color:LIGHT,letterSpacing:0.5}},"AOV $"+AOV+" \u2022 Split "+Math.round(SPLIT*100)+"% \u2022 Conv "+Math.round(CONV*100)+"% \u2022 CT Traffic "+CT_TR+"/day \u2022 NYC Traffic "+NYC_TR+"/day"))));
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(h(App));
+</script>
+</body>
+</html>
